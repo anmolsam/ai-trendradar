@@ -54,6 +54,7 @@ def load_seen():
     return {
         "github": set(data.get("github", [])),
         "arxiv": set(data.get("arxiv", [])),
+        "feeds": set(data.get("feeds", [])),
     }
 
 
@@ -61,7 +62,11 @@ def save_seen(seen):
     os.makedirs(os.path.dirname(SEEN_PATH), exist_ok=True)
     with open(SEEN_PATH, "w", encoding="utf-8") as f:
         json.dump(
-            {"github": sorted(seen["github"]), "arxiv": sorted(seen["arxiv"])},
+            {
+                "github": sorted(seen["github"]),
+                "arxiv": sorted(seen["arxiv"]),
+                "feeds": sorted(seen["feeds"]),
+            },
             f,
             indent=0,
         )
@@ -292,6 +297,127 @@ def fetch_arxiv(cfg, seen):
     return papers[: cfg["limits"]["arxiv"]]
 
 
+# ----------------------------------------------------- hugging face papers --
+def fetch_hf_papers(cfg, seen):
+    """Hugging Face Daily Papers — ranked by community upvotes (best signal)."""
+    if not cfg.get("huggingface", {}).get("enabled", True):
+        return []
+    try:
+        r = requests.get(
+            "https://huggingface.co/api/daily_papers?limit=100", headers=UA, timeout=30
+        )
+        r.raise_for_status()
+        data = r.json()
+    except Exception as e:
+        print(f"[hf] fetch failed: {e}", file=sys.stderr)
+        return []
+
+    out = []
+    for row in data:
+        p = row.get("paper", {})
+        aid = p.get("id", "")
+        if not aid or aid in seen["arxiv"]:
+            continue  # shares arXiv IDs — never repeat across HF/arXiv or days
+        title = re.sub(r"\s+", " ", p.get("title", "")).strip()
+        summary = re.sub(r"\s+", " ", (p.get("ai_summary") or p.get("summary") or "")).strip()
+        keywords = " ".join(p.get("ai_keywords", []) or [])
+        text = f"{title} {summary} {keywords}"
+        if cfg.get("english_only", True) and not is_english(text):
+            continue
+        themes = matched_themes(text, cfg)
+        if not themes:
+            continue
+        authors = ", ".join(
+            a.get("name", "") for a in (p.get("authors") or [])[:4]
+        )
+        out.append(
+            {
+                "id": aid,
+                "title": title,
+                "url": f"https://huggingface.co/papers/{aid}",
+                "summary": summary[:300] + ("…" if len(summary) > 300 else ""),
+                "authors": authors,
+                "themes": sorted(themes),
+                "upvotes": p.get("upvotes", 0) or 0,
+                "gh_repo": p.get("githubRepo", "") or "",
+                "gh_stars": p.get("githubStars", 0) or 0,
+            }
+        )
+    out.sort(key=lambda p: (p["upvotes"], len(p["themes"])), reverse=True)
+    print(f"[hf] {len(out)} new upvoted papers (after dedup)", file=sys.stderr)
+    return out[: cfg["limits"]["huggingface"]]
+
+
+# ------------------------------------------------- lab / institute feeds ----
+def fetch_feeds(cfg, seen):
+    """Pull each lab/institute blog RSS; theme + English + recency filtered."""
+    feeds = cfg.get("feeds", [])
+    if not feeds:
+        return []
+    cutoff = dt.datetime.now(dt.timezone.utc) - dt.timedelta(
+        days=cfg.get("feeds_lookback_days", 7)
+    )
+    run_seen, items = set(), []
+    for feed in feeds:
+        url, label, ftype = feed["url"], feed["label"], feed.get("type", "lab")
+        try:
+            resp = requests.get(url, headers=UA, timeout=20)
+            resp.raise_for_status()
+            entries = feedparser.parse(resp.content).entries
+        except Exception as e:
+            print(f"[feeds] {label} failed: {e}", file=sys.stderr)
+            continue
+
+        for entry in entries[:40]:
+            link = entry.get("link", "")
+            if not link or link in seen["feeds"] or link in run_seen:
+                continue
+            pub = entry.get("published_parsed") or entry.get("updated_parsed")
+            if not pub:
+                continue
+            pub_dt = dt.datetime(*pub[:6], tzinfo=dt.timezone.utc)
+            if pub_dt < cutoff:
+                continue
+            title = re.sub(r"\s+", " ", entry.get("title", "")).strip()
+            raw = entry.get("summary", "") or ""
+            summary = re.sub(r"<[^>]+>", " ", raw)
+            summary = re.sub(r"\s+", " ", html.unescape(summary)).strip()
+            text = f"{title} {summary}"
+            if cfg.get("english_only", True) and not is_english(text):
+                continue
+            themes = matched_themes(text, cfg)
+            if not themes:
+                continue
+            run_seen.add(link)
+            items.append(
+                {
+                    "title": title,
+                    "url": link,
+                    "summary": summary[:280] + ("…" if len(summary) > 280 else ""),
+                    "source": label,
+                    "type": ftype,
+                    "themes": sorted(themes),
+                    "ts": pub_dt.timestamp(),
+                    "date": pub_dt.strftime("%Y-%m-%d"),
+                }
+            )
+    # Own-blog labs/institutes rank above third-party "news"; recent first within.
+    type_rank = {"lab": 0, "institute": 0, "news": 1}
+    items.sort(key=lambda x: (type_rank.get(x["type"], 1), -x["ts"]))
+
+    # Cap per source so one noisy feed (e.g. a Google-News query) can't dominate.
+    per_source = cfg.get("feeds_per_source", 3)
+    counts, capped = {}, []
+    for it in items:
+        if counts.get(it["source"], 0) >= per_source:
+            continue
+        counts[it["source"]] = counts.get(it["source"], 0) + 1
+        capped.append(it)
+    print(f"[feeds] {len(items)} new posts from {len(feeds)} feeds → "
+          f"{len(capped)} after per-source cap", file=sys.stderr)
+    return capped[: cfg["limits"]["feeds"]]
+
+
 # ------------------------------------------------------------------ site ----
 DOCS = os.path.join(ROOT, "docs")
 
@@ -324,7 +450,12 @@ text-decoration:none;}
 .meta{color:var(--muted);font-size:12px;}
 .chip{background:var(--chip);color:var(--chip-text);border-radius:5px;
 padding:1px 7px;font-size:11px;margin-right:4px;white-space:nowrap;}
+.badge{float:right;background:#238636;color:#fff;border-radius:5px;
+padding:1px 8px;font-size:12px;font-weight:600;margin-left:8px;}
+.src{display:inline-block;background:#30363d;color:#adbac7;border-radius:5px;
+padding:1px 8px;font-size:11px;font-weight:600;margin-right:6px;}
 .empty{color:var(--muted);}
+.lead{color:var(--muted);font-size:13px;margin:2px 0 0;}
 nav.bar{display:flex;justify-content:space-between;align-items:center;
 flex-wrap:wrap;gap:10px;margin-bottom:18px;}
 nav.bar a{color:var(--link);text-decoration:none;font-size:14px;}
@@ -348,40 +479,68 @@ def chips(themes):
     )
 
 
-def render_items(repos, papers):
-    out = ["<h2>📦 Trending GitHub repos</h2>"]
-    if repos:
-        for r in repos:
-            meta = " · ".join(x for x in [r.get("lang"), r.get("stars")] if x)
-            out.append(
-                f'<div class="item">'
-                f'<a class="title" href="{esc(r["url"])}" target="_blank" '
-                f'rel="noopener">{esc(r["full_name"])}</a>'
-                f'<div class="desc">{esc(r["desc"])}</div>'
-                f'<div class="meta">{esc(meta)} &nbsp; {chips(r["themes"])}</div>'
-                f"</div>"
-            )
-    else:
-        out.append('<p class="empty">No matching repos today.</p>')
-
-    out.append("<h2>📄 arXiv papers</h2>")
-    if papers:
-        for p in papers:
-            out.append(
-                f'<div class="item">'
-                f'<a class="title" href="{esc(p["url"])}" target="_blank" '
-                f'rel="noopener">{esc(p["title"])}</a>'
-                f'<div class="meta">{esc(p["authors"])}</div>'
-                f'<div class="desc">{esc(p["summary"])}</div>'
-                f'<div>{chips(p["themes"])}</div>'
-                f"</div>"
-            )
-    else:
-        out.append('<p class="empty">No matching papers today.</p>')
-    return "\n".join(out)
+def card(title, url, lead="", body="", themes=(), badge="", src=""):
+    badge_html = f'<span class="badge">{esc(badge)}</span>' if badge else ""
+    src_html = f'<span class="src">{esc(src)}</span>' if src else ""
+    lead_html = f'<div class="lead">{esc(lead)}</div>' if lead else ""
+    body_html = f'<div class="desc">{esc(body)}</div>' if body else ""
+    return (
+        f'<div class="item">{badge_html}'
+        f'{src_html}<a class="title" href="{esc(url)}" target="_blank" '
+        f'rel="noopener">{esc(title)}</a>'
+        f"{lead_html}{body_html}"
+        f'<div class="meta">{chips(themes)}</div></div>'
+    )
 
 
-def render_page(date, repos, papers, archive_dates, is_index):
+def render_section(heading, cards, empty_msg):
+    body = "\n".join(cards) if cards else f'<p class="empty">{empty_msg}</p>'
+    return f"<h2>{heading}</h2>\n{body}"
+
+
+def render_body(data):
+    sections = []
+
+    feed_cards = [
+        card(f["title"], f["url"], lead=f.get("date", ""), body=f["summary"],
+             themes=f["themes"], src=f["source"])
+        for f in data["feeds"]
+    ]
+    sections.append(render_section(
+        "🏢 From the top labs &amp; institutes", feed_cards,
+        "No new lab/institute posts in the window."))
+
+    hf_cards = []
+    for p in data["hf"]:
+        extra = f" · {p['gh_stars']:,}⭐ repo" if p.get("gh_stars") else ""
+        hf_cards.append(card(
+            p["title"], p["url"], lead=(p["authors"] + extra) if p["authors"] else extra,
+            body=p["summary"], themes=p["themes"], badge=f"▲ {p['upvotes']}"))
+    sections.append(render_section(
+        "🤗 Hugging Face — most-upvoted papers", hf_cards,
+        "No new HF papers today."))
+
+    repo_cards = [
+        card(r["full_name"], r["url"],
+             lead=" · ".join(x for x in [r.get("lang"), r.get("stars")] if x),
+             body=r["desc"], themes=r["themes"])
+        for r in data["repos"]
+    ]
+    sections.append(render_section(
+        "📦 Trending GitHub repos", repo_cards, "No matching repos today."))
+
+    paper_cards = [
+        card(p["title"], p["url"], lead=p["authors"], body=p["summary"],
+             themes=p["themes"])
+        for p in data["arxiv"]
+    ]
+    sections.append(render_section(
+        "📄 Fresh arXiv papers", paper_cards, "No matching papers today."))
+
+    return "\n".join(sections)
+
+
+def render_page(date, data, archive_dates, is_index):
     nav = (
         '<nav class="bar"><a href="index.html">← Latest</a>'
         '<a href="https://github.com/anmolsam/ai-trendradar" target="_blank" '
@@ -408,10 +567,11 @@ def render_page(date, repos, papers, archive_dates, is_index):
 {nav}
 <header>
 <h1>🛰️ AI TrendRadar</h1>
-<div class="sub">{esc(date)} · {len(repos)} repos · {len(papers)} papers ·
-AI advancement, agents, MCP, frontier labs, FAANG</div>
+<div class="sub">{esc(date)} · {len(data["feeds"])} lab posts ·
+{len(data["hf"])} HF papers · {len(data["repos"])} repos ·
+{len(data["arxiv"])} arXiv · AI advancement, agents, MCP, frontier labs, FAANG</div>
 </header>
-{render_items(repos, papers)}
+{render_body(data)}
 {archive_html}
 <footer>Updated daily via GitHub Actions. Edit <code>config.yaml</code> to tune topics.</footer>
 </div></body></html>"""
@@ -427,7 +587,7 @@ def list_archive_dates():
     return sorted(set(dates), reverse=True)
 
 
-def write_site(repos, papers, today):
+def write_site(data, today):
     os.makedirs(DOCS, exist_ok=True)
     # disable Jekyll so files are served verbatim
     open(os.path.join(DOCS, ".nojekyll"), "w").close()
@@ -435,15 +595,16 @@ def write_site(repos, papers, today):
     # today's archived page (overwrite if re-run same day)
     day_path = os.path.join(DOCS, f"{today}.html")
     with open(day_path, "w", encoding="utf-8") as f:
-        f.write(render_page(today, repos, papers, [], is_index=False))
+        f.write(render_page(today, data, [], is_index=False))
 
     # index = today's content + archive list of every past day
     archive = [d for d in list_archive_dates() if d != today]
     with open(os.path.join(DOCS, "index.html"), "w", encoding="utf-8") as f:
-        f.write(render_page(today, repos, papers, archive, is_index=True))
+        f.write(render_page(today, data, archive, is_index=True))
 
     print(f"[site] wrote {day_path} and index.html "
-          f"({len(repos)} repos, {len(papers)} papers, "
+          f"({len(data['feeds'])} posts, {len(data['hf'])} hf, "
+          f"{len(data['repos'])} repos, {len(data['arxiv'])} arxiv, "
           f"{len(archive)} archived days)", file=sys.stderr)
 
 
@@ -453,17 +614,25 @@ def main():
     today = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d")
 
     seen = load_seen()
+    # HF first; its arXiv IDs get reserved so the arXiv section won't duplicate them.
+    hf = fetch_hf_papers(cfg, seen)
+    seen["arxiv"].update(p["id"] for p in hf)
+
     repos = collect_github(cfg, seen)
-    papers = fetch_arxiv(cfg, seen)
+    arxiv = fetch_arxiv(cfg, seen)
+    feeds = fetch_feeds(cfg, seen)
 
-    write_site(repos, papers, today)
+    data = {"feeds": feeds, "hf": hf, "repos": repos, "arxiv": arxiv}
+    write_site(data, today)
 
-    # Record everything we published today so it never repeats on a future day.
+    # Record everything published today so it never repeats on a future day.
     seen["github"].update(r["full_name"] for r in repos)
-    seen["arxiv"].update(p["id"] for p in papers)
+    seen["arxiv"].update(p["id"] for p in arxiv)
+    seen["feeds"].update(f["url"] for f in feeds)
     save_seen(seen)
-    print(f"[seen] ledger now holds {len(seen['github'])} repos, "
-          f"{len(seen['arxiv'])} papers", file=sys.stderr)
+    print(f"[seen] ledger: {len(seen['github'])} repos, "
+          f"{len(seen['arxiv'])} papers, {len(seen['feeds'])} posts",
+          file=sys.stderr)
 
 
 if __name__ == "__main__":

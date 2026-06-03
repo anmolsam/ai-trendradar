@@ -9,10 +9,21 @@ lookback_days:
   github: 7      # repos created in the last N days (for the search API pass)
   arxiv: 2       # papers submitted in the last N days
 
-# Max items per section in the email
+# Max items per section
 limits:
   github: 20
   arxiv: 20
+  huggingface: 15
+  feeds: 30
+
+# Only show blog/lab posts published in the last N days
+feeds_lookback_days: 7
+# Max posts per single source (stops one noisy feed dominating)
+feeds_per_source: 3
+
+# Hugging Face Daily Papers (community-upvoted) — the highest-signal paper source
+huggingface:
+  enabled: true
 
 # English-only filter. Repos/papers with predominantly non-Latin (CJK etc.)
 # titles+descriptions are dropped.
@@ -99,3 +110,31 @@ arxiv_categories:
   - cs.CL
   - cs.LG
   - cs.MA   # multi-agent systems
+
+# Blog / lab / institute RSS feeds — the output of the top companies & labs.
+# Each post is theme-filtered, English-only, recency-capped, and never repeated.
+# type is just a display label (lab / institute / news). Add or remove freely.
+feeds:
+  # --- Frontier labs & big-tech AI (their own blogs) ---
+  - {label: "OpenAI",            type: lab, url: "https://openai.com/news/rss.xml"}
+  - {label: "Google DeepMind",   type: lab, url: "https://deepmind.google/blog/rss.xml"}
+  - {label: "Google Research",   type: lab, url: "https://research.google/blog/rss/"}
+  - {label: "Microsoft Research",type: lab, url: "https://www.microsoft.com/en-us/research/feed/"}
+  - {label: "NVIDIA",            type: lab, url: "https://developer.nvidia.com/blog/feed/"}
+  - {label: "Apple ML",          type: lab, url: "https://machinelearning.apple.com/rss.xml"}
+  - {label: "Hugging Face",      type: lab, url: "https://huggingface.co/blog/feed.xml"}
+  - {label: "Together AI",       type: lab, url: "https://www.together.ai/blog/rss.xml"}
+  - {label: "AWS ML",            type: lab, url: "https://aws.amazon.com/blogs/machine-learning/feed/"}
+  # --- Top institutes ---
+  - {label: "Berkeley BAIR",     type: institute, url: "https://bair.berkeley.edu/blog/feed.xml"}
+  - {label: "CMU ML",            type: institute, url: "https://blog.ml.cmu.edu/feed/"}
+  - {label: "MIT News AI",       type: institute, url: "https://news.mit.edu/rss/topic/artificial-intelligence2"}
+  - {label: "Stanford SAIL",     type: institute, url: "https://ai.stanford.edu/blog/feed.xml"}
+  # --- Labs without their own feed: Google News search (last 7 days) ---
+  - {label: "Anthropic", type: news, url: "https://news.google.com/rss/search?q=when:7d%20Anthropic%20Claude%20AI&hl=en-US&gl=US&ceid=US:en"}
+  - {label: "Meta AI",   type: news, url: "https://news.google.com/rss/search?q=when:7d%20(Meta%20AI%20OR%20FAIR%20OR%20Llama)%20model&hl=en-US&gl=US&ceid=US:en"}
+  - {label: "Mistral AI",type: news, url: "https://news.google.com/rss/search?q=when:7d%20Mistral%20AI%20model&hl=en-US&gl=US&ceid=US:en"}
+  - {label: "DeepSeek",  type: news, url: "https://news.google.com/rss/search?q=when:7d%20DeepSeek%20AI%20model&hl=en-US&gl=US&ceid=US:en"}
+  - {label: "xAI Grok",  type: news, url: "https://news.google.com/rss/search?q=when:7d%20xAI%20Grok&hl=en-US&gl=US&ceid=US:en"}
+  # --- AI news aggregator ---
+  - {label: "MarkTechPost",      type: news, url: "https://www.marktechpost.com/feed/"}

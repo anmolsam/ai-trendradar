@@ -9,15 +9,29 @@ the homepage shows the latest, with an archive list of all past days.
 
 **Live site:** https://anmolsam.github.io/ai-trendradar/
 
-## What it does
+## Sources (ranked by signal)
 
-- **GitHub repos** — scrapes `github.com/trending` (daily) *and* runs targeted
-  GitHub Search API queries for recently-created, high-star repos.
-- **arXiv papers** — pulls the latest announcements from `cs.AI`, `cs.CL`, `cs.LG`,
-  `cs.MA` via arXiv's RSS feeds.
-- Filters by the keyword themes in `config.yaml`, drops non-English (CJK-heavy)
-  items, dedupes, and renders a dark-themed HTML page into `docs/`.
-- A GitHub Actions cron commits the new pages back daily — no server, no email.
+1. **Top labs & institutes** — RSS from OpenAI, Google DeepMind, Google Research,
+   Microsoft Research, NVIDIA, Apple ML, Hugging Face, Together AI, AWS ML +
+   Berkeley BAIR, CMU ML, MIT, Stanford SAIL. Labs without a feed (Anthropic,
+   Meta, Mistral, DeepSeek, xAI) come via targeted Google News searches.
+2. **Hugging Face Daily Papers** — ranked by community **upvotes** (best paper signal).
+3. **Trending GitHub repos** — `github.com/trending` (star velocity) + GitHub
+   Search API (total stars), ranked mcpmarket-style by stars-gained-today.
+4. **Fresh arXiv papers** — `cs.AI/cs.CL/cs.LG/cs.MA` RSS, weighted toward
+   frontier-lab / agent / MCP topics.
+
+Everything is theme-filtered (`config.yaml`), English-only, recency-capped,
+per-source capped, and **never repeated** (see the seen-ledger below). Rendered
+to a dark-themed page in `docs/`; a GitHub Actions cron commits it daily — no
+server, no email.
+
+## Never-repeat ledger
+
+`state/seen.json` records every repo / paper / post ever published. Each run
+excludes anything already in it, then appends today's items and commits the
+ledger back. So a repo or paper appears **once, ever** — a new day always brings
+new content.
 
 ## How it publishes
 
