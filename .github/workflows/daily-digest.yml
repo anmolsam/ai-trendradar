@@ -7,7 +7,11 @@ on:
   workflow_dispatch: {}   # lets you run it manually from the Actions tab
 
 permissions:
-  contents: read
+  contents: write          # to commit the generated docs/ pages back to the repo
+
+concurrency:
+  group: trendradar
+  cancel-in-progress: false
 
 jobs:
   digest:
@@ -23,9 +27,19 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Build and send digest
+      - name: Build digest page
         env:
-          GMAIL_USER: ${{ secrets.GMAIL_USER }}
-          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: python trendradar.py
+
+      - name: Commit & push updated pages
+        run: |
+          git config user.name "trendradar-bot"
+          git config user.email "actions@github.com"
+          git add docs
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+          else
+            git commit -m "TrendRadar digest $(date -u +%Y-%m-%d)"
+            git push
+          fi

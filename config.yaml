@@ -1,11 +1,8 @@
 # AI TrendRadar configuration
 # Edit keywords/recipients here. No code changes needed.
 
-email:
-  to:
-    - anmol@attentive.ai
-  # from / smtp are read from GitHub secrets (GMAIL_USER, GMAIL_APP_PASSWORD)
-  subject_prefix: "AI TrendRadar"
+# Output is a daily HTML page published to GitHub Pages (docs/).
+# No email — each run adds docs/<date>.html and rebuilds docs/index.html.
 
 # How far back to look (in days) for "trending"
 lookback_days:

@@ -1,10 +1,13 @@
 # AI TrendRadar
 
-Daily email digest of **trending GitHub repos + fresh arXiv papers**, filtered to
-English-only content about: AI advancement, AI agents, MCP servers, frontier labs
-(Anthropic/OpenAI/DeepMind/Mistral/…), and FAANG AI.
+A daily-updated **web page** of trending GitHub repos + fresh arXiv papers,
+filtered to English-only content about: AI advancement, AI agents, MCP servers,
+frontier labs (Anthropic/OpenAI/DeepMind/Mistral/…), and FAANG AI.
 
-Runs on a free GitHub Actions cron and emails you via Gmail SMTP. No server needed.
+Published free via **GitHub Pages**. Every day a new dated page is generated and
+the homepage shows the latest, with an archive list of all past days.
+
+**Live site:** https://anmolsam.github.io/ai-trendradar/
 
 ## What it does
 
@@ -12,49 +15,39 @@ Runs on a free GitHub Actions cron and emails you via Gmail SMTP. No server need
   GitHub Search API queries for recently-created, high-star repos.
 - **arXiv papers** — pulls the latest announcements from `cs.AI`, `cs.CL`, `cs.LG`,
   `cs.MA` via arXiv's RSS feeds.
-- Filters everything by the keyword themes in `config.yaml`, drops non-English
-  (CJK-heavy) items, dedupes, and emails a clean HTML digest.
+- Filters by the keyword themes in `config.yaml`, drops non-English (CJK-heavy)
+  items, dedupes, and renders a dark-themed HTML page into `docs/`.
+- A GitHub Actions cron commits the new pages back daily — no server, no email.
 
-## Setup
+## How it publishes
 
-### 1. Push to GitHub
-```bash
-cd ai-trendradar
-gh repo create ai-trendradar --private --source=. --remote=origin --push
-# or: create a repo on github.com and `git push -u origin main`
-```
+Each run writes:
+- `docs/<YYYY-MM-DD>.html` — that day's archived snapshot.
+- `docs/index.html` — the latest digest + an **Archive** list linking every past day.
 
-### 2. Generate a Gmail app password
-1. Enable 2-Step Verification on your Google account.
-2. Go to https://myaccount.google.com/apppasswords → create an app password.
-3. Copy the 16-character password.
+GitHub Pages serves the `docs/` folder on the `main` branch.
 
-### 3. Add repo secrets
-In the GitHub repo: **Settings → Secrets and variables → Actions → New repository secret**
+## Setup (already done for this repo)
 
-| Secret | Value |
-|--------|-------|
-| `GMAIL_USER` | your full Gmail address (the sender) |
-| `GMAIL_APP_PASSWORD` | the 16-char app password from step 2 |
+1. **Enable Pages:** Settings → Pages → Source = "Deploy from a branch",
+   Branch = `main`, Folder = `/docs`.
+2. **Schedule:** runs daily at **08:00 IST (02:30 UTC)** via
+   `.github/workflows/daily-digest.yml`. Trigger manually anytime from the
+   **Actions** tab → "Run workflow".
 
-`GITHUB_TOKEN` is provided automatically by Actions — no setup needed.
-
-### 4. Run it
-- Manual: **Actions tab → "AI TrendRadar daily digest" → Run workflow**.
-- Automatic: runs daily at **08:00 IST (02:30 UTC)**. Change the cron in
-  `.github/workflows/daily-digest.yml`.
+The workflow uses the auto-provided `GITHUB_TOKEN` only — no secrets to set.
 
 ## Tuning
 
 Everything is in **`config.yaml`** — no code changes needed:
-- `email.to` — recipients (currently `anmol@attentive.ai`).
 - `themes` — keyword groups; an item is kept if it matches **any** keyword.
-- `limits` — max repos/papers per email.
+- `limits` — max repos/papers per page.
 - `github_search_queries` — extra GitHub Search queries.
 - `arxiv_categories` — which arXiv categories to pull.
 
-## Local test (no email sent)
+## Local run
 ```bash
 python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
-.venv/bin/python trendradar.py --dry-run   # writes digest_preview.html
+.venv/bin/python trendradar.py        # writes docs/index.html + docs/<date>.html
+open docs/index.html
 ```

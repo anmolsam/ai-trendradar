@@ -3,19 +3,18 @@
 AI TrendRadar — daily digest of trending GitHub repos + arXiv papers
 on AI advancement, AI agents, MCP servers, frontier labs, and FAANG.
 
-Runs in GitHub Actions, emails the digest via Gmail SMTP.
-Config lives in config.yaml; secrets (GMAIL_USER, GMAIL_APP_PASSWORD) come from env.
+Runs in GitHub Actions; publishes a daily HTML page to GitHub Pages (docs/).
+Each run writes docs/<YYYY-MM-DD>.html and rebuilds docs/index.html (latest +
+an archive list of every past day). Config lives in config.yaml.
 """
 
 import os
 import re
 import sys
+import glob
 import html
 import time
-import smtplib
 import datetime as dt
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
 
 import requests
 import feedparser
@@ -230,7 +229,9 @@ def fetch_arxiv(cfg):
     return papers[: cfg["limits"]["arxiv"]]
 
 
-# ----------------------------------------------------------------- email ----
+# ------------------------------------------------------------------ site ----
+DOCS = os.path.join(ROOT, "docs")
+
 THEME_LABELS = {
     "ai_advancement": "AI advancement",
     "ai_agents": "AI agents",
@@ -239,80 +240,148 @@ THEME_LABELS = {
     "faang": "FAANG",
 }
 
+PAGE_CSS = """
+:root{--bg:#0d1117;--card:#161b22;--border:#30363d;--text:#e6edf3;
+--muted:#8b949e;--link:#58a6ff;--chip:#1f6feb33;--chip-text:#79c0ff;}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);
+font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+line-height:1.5;}
+.wrap{max-width:820px;margin:0 auto;padding:28px 18px 60px;}
+header h1{font-size:26px;margin:0 0 4px;}
+header .sub{color:var(--muted);font-size:14px;}
+h2{font-size:18px;margin:34px 0 10px;padding-bottom:6px;
+border-bottom:1px solid var(--border);}
+.item{background:var(--card);border:1px solid var(--border);border-radius:10px;
+padding:14px 16px;margin:10px 0;}
+.item a.title{font-size:16px;font-weight:600;color:var(--link);
+text-decoration:none;}
+.item a.title:hover{text-decoration:underline;}
+.desc{color:#c9d1d9;font-size:14px;margin:5px 0;}
+.meta{color:var(--muted);font-size:12px;}
+.chip{background:var(--chip);color:var(--chip-text);border-radius:5px;
+padding:1px 7px;font-size:11px;margin-right:4px;white-space:nowrap;}
+.empty{color:var(--muted);}
+nav.bar{display:flex;justify-content:space-between;align-items:center;
+flex-wrap:wrap;gap:10px;margin-bottom:18px;}
+nav.bar a{color:var(--link);text-decoration:none;font-size:14px;}
+.archive{display:flex;flex-wrap:wrap;gap:8px;margin-top:6px;}
+.archive a{background:var(--card);border:1px solid var(--border);
+border-radius:8px;padding:6px 11px;color:var(--link);text-decoration:none;
+font-size:13px;}
+.archive a:hover{border-color:var(--link);}
+footer{margin-top:40px;color:var(--muted);font-size:12px;
+border-top:1px solid var(--border);padding-top:14px;}
+"""
+
+
+def esc(s):
+    return html.escape(s or "")
+
 
 def chips(themes):
     return " ".join(
-        f'<span style="background:#eef;border-radius:4px;padding:1px 6px;'
-        f'font-size:11px;color:#334;">{THEME_LABELS.get(t, t)}</span>'
-        for t in themes
+        f'<span class="chip">{esc(THEME_LABELS.get(t, t))}</span>' for t in themes
     )
 
 
-def build_html(repos, papers, today):
-    def esc(s):
-        return html.escape(s or "")
-
-    parts = [
-        '<div style="font-family:-apple-system,Segoe UI,Roboto,sans-serif;'
-        'max-width:720px;margin:auto;color:#1a1a1a;">',
-        f'<h1 style="font-size:22px;">🛰️ AI TrendRadar — {today}</h1>',
-        f'<p style="color:#666;">{len(repos)} repos · {len(papers)} papers · '
-        "AI advancement, agents, MCP, frontier labs, FAANG</p>",
-    ]
-
-    parts.append('<h2 style="border-bottom:2px solid #333;">📦 Trending GitHub repos</h2>')
+def render_items(repos, papers):
+    out = ["<h2>📦 Trending GitHub repos</h2>"]
     if repos:
         for r in repos:
             meta = " · ".join(x for x in [r.get("lang"), r.get("stars")] if x)
-            parts.append(
-                f'<div style="margin:14px 0;">'
-                f'<a href="{esc(r["url"])}" style="font-size:16px;font-weight:600;'
-                f'color:#0366d6;text-decoration:none;">{esc(r["full_name"])}</a>'
-                f'<div style="color:#555;font-size:14px;margin:2px 0;">{esc(r["desc"])}</div>'
-                f'<div style="color:#888;font-size:12px;">{esc(meta)} &nbsp; {chips(r["themes"])}</div>'
+            out.append(
+                f'<div class="item">'
+                f'<a class="title" href="{esc(r["url"])}" target="_blank" '
+                f'rel="noopener">{esc(r["full_name"])}</a>'
+                f'<div class="desc">{esc(r["desc"])}</div>'
+                f'<div class="meta">{esc(meta)} &nbsp; {chips(r["themes"])}</div>'
                 f"</div>"
             )
     else:
-        parts.append('<p style="color:#999;">No matching repos today.</p>')
+        out.append('<p class="empty">No matching repos today.</p>')
 
-    parts.append('<h2 style="border-bottom:2px solid #333;margin-top:28px;">📄 arXiv papers</h2>')
+    out.append("<h2>📄 arXiv papers</h2>")
     if papers:
         for p in papers:
-            parts.append(
-                f'<div style="margin:14px 0;">'
-                f'<a href="{esc(p["url"])}" style="font-size:16px;font-weight:600;'
-                f'color:#0366d6;text-decoration:none;">{esc(p["title"])}</a>'
-                f'<div style="color:#777;font-size:12px;margin:2px 0;">{esc(p["authors"])}</div>'
-                f'<div style="color:#555;font-size:14px;">{esc(p["summary"])}</div>'
-                f'<div style="margin-top:3px;">{chips(p["themes"])}</div>'
+            out.append(
+                f'<div class="item">'
+                f'<a class="title" href="{esc(p["url"])}" target="_blank" '
+                f'rel="noopener">{esc(p["title"])}</a>'
+                f'<div class="meta">{esc(p["authors"])}</div>'
+                f'<div class="desc">{esc(p["summary"])}</div>'
+                f'<div>{chips(p["themes"])}</div>'
                 f"</div>"
             )
     else:
-        parts.append('<p style="color:#999;">No matching papers today.</p>')
+        out.append('<p class="empty">No matching papers today.</p>')
+    return "\n".join(out)
 
-    parts.append(
-        '<p style="color:#aaa;font-size:11px;margin-top:30px;">'
-        "Generated by ai-trendradar. Edit config.yaml to tune topics.</p></div>"
+
+def render_page(date, repos, papers, archive_dates, is_index):
+    nav = (
+        '<nav class="bar"><a href="index.html">← Latest</a>'
+        '<a href="https://github.com/anmolsam/ai-trendradar" target="_blank" '
+        'rel="noopener">Source on GitHub</a></nav>'
+        if not is_index
+        else '<nav class="bar"><span></span>'
+        '<a href="https://github.com/anmolsam/ai-trendradar" target="_blank" '
+        'rel="noopener">Source on GitHub</a></nav>'
     )
-    return "\n".join(parts)
+
+    archive_html = ""
+    if is_index and archive_dates:
+        links = "".join(f'<a href="{d}.html">{d}</a>' for d in archive_dates)
+        archive_html = f'<h2>🗓️ Archive</h2><div class="archive">{links}</div>'
+
+    title = "AI TrendRadar" if is_index else f"AI TrendRadar — {date}"
+    return f"""<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{esc(title)}</title>
+<style>{PAGE_CSS}</style>
+</head><body><div class="wrap">
+{nav}
+<header>
+<h1>🛰️ AI TrendRadar</h1>
+<div class="sub">{esc(date)} · {len(repos)} repos · {len(papers)} papers ·
+AI advancement, agents, MCP, frontier labs, FAANG</div>
+</header>
+{render_items(repos, papers)}
+{archive_html}
+<footer>Updated daily via GitHub Actions. Edit <code>config.yaml</code> to tune topics.</footer>
+</div></body></html>"""
 
 
-def send_email(cfg, html_body, today):
-    user = os.environ["GMAIL_USER"]
-    password = os.environ["GMAIL_APP_PASSWORD"]
-    recipients = cfg["email"]["to"]
+def list_archive_dates():
+    """All dated pages already in docs/, newest first."""
+    dates = []
+    for path in glob.glob(os.path.join(DOCS, "*.html")):
+        name = os.path.splitext(os.path.basename(path))[0]
+        if re.fullmatch(r"\d{4}-\d{2}-\d{2}", name):
+            dates.append(name)
+    return sorted(set(dates), reverse=True)
 
-    msg = MIMEMultipart("alternative")
-    msg["Subject"] = f'{cfg["email"]["subject_prefix"]} — {today}'
-    msg["From"] = user
-    msg["To"] = ", ".join(recipients)
-    msg.attach(MIMEText("HTML email — view in an HTML-capable client.", "plain"))
-    msg.attach(MIMEText(html_body, "html"))
 
-    with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
-        server.login(user, password)
-        server.sendmail(user, recipients, msg.as_string())
-    print(f"[email] sent to {recipients}", file=sys.stderr)
+def write_site(repos, papers, today):
+    os.makedirs(DOCS, exist_ok=True)
+    # disable Jekyll so files are served verbatim
+    open(os.path.join(DOCS, ".nojekyll"), "w").close()
+
+    # today's archived page (overwrite if re-run same day)
+    day_path = os.path.join(DOCS, f"{today}.html")
+    with open(day_path, "w", encoding="utf-8") as f:
+        f.write(render_page(today, repos, papers, [], is_index=False))
+
+    # index = today's content + archive list of every past day
+    archive = [d for d in list_archive_dates() if d != today]
+    with open(os.path.join(DOCS, "index.html"), "w", encoding="utf-8") as f:
+        f.write(render_page(today, repos, papers, archive, is_index=True))
+
+    print(f"[site] wrote {day_path} and index.html "
+          f"({len(repos)} repos, {len(papers)} papers, "
+          f"{len(archive)} archived days)", file=sys.stderr)
 
 
 # ------------------------------------------------------------------ main ----
@@ -322,18 +391,7 @@ def main():
 
     repos = collect_github(cfg)
     papers = fetch_arxiv(cfg)
-    html_body = build_html(repos, papers, today)
-
-    dry = "--dry-run" in sys.argv or not os.environ.get("GMAIL_USER")
-    if dry:
-        out = os.path.join(ROOT, "digest_preview.html")
-        with open(out, "w", encoding="utf-8") as f:
-            f.write(html_body)
-        print(f"[dry-run] wrote preview to {out} "
-              f"({len(repos)} repos, {len(papers)} papers)", file=sys.stderr)
-        return
-
-    send_email(cfg, html_body, today)
+    write_site(repos, papers, today)
 
 
 if __name__ == "__main__":
