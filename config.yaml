@@ -4,10 +4,11 @@
 # Output is a daily HTML page published to GitHub Pages (docs/).
 # No email — each run adds docs/<date>.html and rebuilds docs/index.html.
 
-# How far back to look (in days) for "trending"
+# TODAY-ONLY mode: every section shows only fresh content from the last day,
+# and the never-repeat ledger guarantees nothing carries over from yesterday.
 lookback_days:
-  github: 7      # repos created in the last N days (for the search API pass)
-  arxiv: 2       # papers submitted in the last N days
+  github: 1      # repos created in the last day (search API pass)
+  arxiv: 2       # (arXiv uses its latest daily RSS batch regardless)
 
 # Max items per section
 limits:
@@ -16,14 +17,17 @@ limits:
   huggingface: 15
   feeds: 30
 
-# Only show blog/lab posts published in the last N days
-feeds_lookback_days: 7
+# Only show blog/lab posts published in the last N days (1 = today only)
+feeds_lookback_days: 1
 # Max posts per single source (stops one noisy feed dominating)
 feeds_per_source: 3
 
-# Hugging Face Daily Papers (community-upvoted) — the highest-signal paper source
+# Hugging Face Daily Papers (community-upvoted) — the highest-signal paper source.
+# HF papers accrue upvotes over ~2 days, so we look back a few days to catch the
+# matured, well-upvoted ones; the never-repeat ledger keeps each day fresh.
 huggingface:
   enabled: true
+  lookback_days: 3
 
 # English-only filter. Repos/papers with predominantly non-Latin (CJK etc.)
 # titles+descriptions are dropped.
@@ -131,10 +135,10 @@ feeds:
   - {label: "MIT News AI",       type: institute, url: "https://news.mit.edu/rss/topic/artificial-intelligence2"}
   - {label: "Stanford SAIL",     type: institute, url: "https://ai.stanford.edu/blog/feed.xml"}
   # --- Labs without their own feed: Google News search (last 7 days) ---
-  - {label: "Anthropic", type: news, url: "https://news.google.com/rss/search?q=when:7d%20Anthropic%20Claude%20AI&hl=en-US&gl=US&ceid=US:en"}
-  - {label: "Meta AI",   type: news, url: "https://news.google.com/rss/search?q=when:7d%20(Meta%20AI%20OR%20FAIR%20OR%20Llama)%20model&hl=en-US&gl=US&ceid=US:en"}
-  - {label: "Mistral AI",type: news, url: "https://news.google.com/rss/search?q=when:7d%20Mistral%20AI%20model&hl=en-US&gl=US&ceid=US:en"}
-  - {label: "DeepSeek",  type: news, url: "https://news.google.com/rss/search?q=when:7d%20DeepSeek%20AI%20model&hl=en-US&gl=US&ceid=US:en"}
-  - {label: "xAI Grok",  type: news, url: "https://news.google.com/rss/search?q=when:7d%20xAI%20Grok&hl=en-US&gl=US&ceid=US:en"}
+  - {label: "Anthropic", type: news, url: "https://news.google.com/rss/search?q=when:1d%20Anthropic%20Claude%20AI&hl=en-US&gl=US&ceid=US:en"}
+  - {label: "Meta AI",   type: news, url: "https://news.google.com/rss/search?q=when:1d%20(Meta%20AI%20OR%20FAIR%20OR%20Llama)%20model&hl=en-US&gl=US&ceid=US:en"}
+  - {label: "Mistral AI",type: news, url: "https://news.google.com/rss/search?q=when:1d%20Mistral%20AI%20model&hl=en-US&gl=US&ceid=US:en"}
+  - {label: "DeepSeek",  type: news, url: "https://news.google.com/rss/search?q=when:1d%20DeepSeek%20AI%20model&hl=en-US&gl=US&ceid=US:en"}
+  - {label: "xAI Grok",  type: news, url: "https://news.google.com/rss/search?q=when:1d%20xAI%20Grok&hl=en-US&gl=US&ceid=US:en"}
   # --- AI news aggregator ---
   - {label: "MarkTechPost",      type: news, url: "https://www.marktechpost.com/feed/"}

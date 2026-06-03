@@ -312,8 +312,17 @@ def fetch_hf_papers(cfg, seen):
         print(f"[hf] fetch failed: {e}", file=sys.stderr)
         return []
 
+    # Rolling window — HF papers mature (gain upvotes) over ~2 days. The ledger
+    # then ensures none repeat, so each day still shows only fresh-to-you papers.
+    look = cfg.get("huggingface", {}).get("lookback_days", 3)
+    cutoff = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=look)).strftime(
+        "%Y-%m-%d"
+    )
+
     out = []
     for row in data:
+        if row.get("publishedAt", "")[:10] < cutoff:
+            continue  # older than the window
         p = row.get("paper", {})
         aid = p.get("id", "")
         if not aid or aid in seen["arxiv"]:
@@ -344,7 +353,8 @@ def fetch_hf_papers(cfg, seen):
             }
         )
     out.sort(key=lambda p: (p["upvotes"], len(p["themes"])), reverse=True)
-    print(f"[hf] {len(out)} new upvoted papers (after dedup)", file=sys.stderr)
+    print(f"[hf] {len(out)} new upvoted papers since {cutoff} (after dedup)",
+          file=sys.stderr)
     return out[: cfg["limits"]["huggingface"]]
 
 
@@ -561,12 +571,13 @@ def render_page(date, data, archive_dates, is_index):
 <html lang="en"><head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
+<meta http-equiv="refresh" content="3600">
 <title>{esc(title)}</title>
 <style>{PAGE_CSS}</style>
 </head><body><div class="wrap">
 {nav}
 <header>
-<h1>🛰️ AI TrendRadar</h1>
+<h1>🛰️ AI TrendRadar — Today</h1>
 <div class="sub">{esc(date)} · {len(data["feeds"])} lab posts ·
 {len(data["hf"])} HF papers · {len(data["repos"])} repos ·
 {len(data["arxiv"])} arXiv · AI advancement, agents, MCP, frontier labs, FAANG</div>

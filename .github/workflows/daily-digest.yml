@@ -2,8 +2,8 @@ name: AI TrendRadar daily digest
 
 on:
   schedule:
-    # 02:30 UTC = 08:00 IST, every day
-    - cron: "30 2 * * *"
+    # 03:30 UTC = 09:00 IST, every day
+    - cron: "30 3 * * *"
   workflow_dispatch: {}   # lets you run it manually from the Actions tab
 
 permissions:
