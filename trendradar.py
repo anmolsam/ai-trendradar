@@ -466,6 +466,19 @@ padding:1px 8px;font-size:12px;font-weight:600;margin-left:8px;}
 padding:1px 8px;font-size:11px;font-weight:600;margin-right:6px;}
 .empty{color:var(--muted);}
 .lead{color:var(--muted);font-size:13px;margin:2px 0 0;}
+.rank{display:inline-block;min-width:22px;color:var(--muted);font-weight:700;
+font-size:13px;margin-right:6px;}
+.tabs{position:sticky;top:0;z-index:5;background:var(--bg);display:flex;
+flex-wrap:wrap;gap:8px;padding:12px 0;margin:6px 0 4px;
+border-bottom:1px solid var(--border);}
+.tab{background:var(--card);border:1px solid var(--border);color:var(--text);
+border-radius:20px;padding:7px 16px;font-size:14px;font-weight:600;cursor:pointer;}
+.tab:hover{border-color:var(--link);}
+.tab.active{background:var(--link);color:#04101f;border-color:var(--link);}
+.hero{background:linear-gradient(135deg,#1f6feb22,#161b22);
+border:1px solid #1f6feb55;border-radius:12px;padding:13px 16px;margin:10px 0;}
+.hero .tag{font-size:11px;font-weight:700;color:#ffa657;letter-spacing:.04em;
+text-transform:uppercase;}
 nav.bar{display:flex;justify-content:space-between;align-items:center;
 flex-wrap:wrap;gap:10px;margin-bottom:18px;}
 nav.bar a{color:var(--link);text-decoration:none;font-size:14px;}
@@ -489,13 +502,14 @@ def chips(themes):
     )
 
 
-def card(title, url, lead="", body="", themes=(), badge="", src=""):
+def card(title, url, lead="", body="", themes=(), badge="", src="", rank=0):
     badge_html = f'<span class="badge">{esc(badge)}</span>' if badge else ""
     src_html = f'<span class="src">{esc(src)}</span>' if src else ""
+    rank_html = f'<span class="rank">#{rank}</span>' if rank else ""
     lead_html = f'<div class="lead">{esc(lead)}</div>' if lead else ""
     body_html = f'<div class="desc">{esc(body)}</div>' if body else ""
     return (
-        f'<div class="item">{badge_html}'
+        f'<div class="item">{badge_html}{rank_html}'
         f'{src_html}<a class="title" href="{esc(url)}" target="_blank" '
         f'rel="noopener">{esc(title)}</a>'
         f"{lead_html}{body_html}"
@@ -503,51 +517,98 @@ def card(title, url, lead="", body="", themes=(), badge="", src=""):
     )
 
 
-def render_section(heading, cards, empty_msg):
+def render_section(cat, heading, cards, empty_msg):
     body = "\n".join(cards) if cards else f'<p class="empty">{empty_msg}</p>'
-    return f"<h2>{heading}</h2>\n{body}"
+    return f'<section data-cat="{cat}"><h2>{heading}</h2>\n{body}</section>'
+
+
+# Clickable filter tabs + client-side category toggle. Static-page friendly.
+TABS_HTML = """<div class="tabs">
+<button class="tab active" data-tab="all" onclick="flt('all',this)">All</button>
+<button class="tab" data-tab="news" onclick="flt('news',this)">📰 News</button>
+<button class="tab" data-tab="papers" onclick="flt('papers',this)">📄 Papers</button>
+<button class="tab" data-tab="repos" onclick="flt('repos',this)">📦 Repos</button>
+</div>"""
+
+FILTER_JS = """<script>
+function flt(cat,btn){
+  document.querySelectorAll('[data-cat]').forEach(function(el){
+    el.style.display=(cat==='all'||el.dataset.cat===cat)?'':'none';
+  });
+  document.querySelectorAll('.tab').forEach(function(t){t.classList.remove('active');});
+  btn.classList.add('active');
+}
+</script>"""
+
+
+def hero(tag, cat, inner):
+    return f'<div class="hero" data-cat="{cat}"><div class="tag">{tag}</div>{inner}</div>'
+
+
+def render_highlights(data):
+    """🔥 The single most-famous item in each category, pinned at the top."""
+    cards = []
+    if data["repos"]:
+        r = data["repos"][0]
+        meta = " · ".join(x for x in [r.get("lang"), r.get("stars")] if x)
+        cards.append(hero("🔥 Hottest repo today", "repos",
+            card(r["full_name"], r["url"], lead=meta, body=r["desc"],
+                 themes=r["themes"])))
+    if data["hf"]:
+        p = data["hf"][0]
+        cards.append(hero(f"🔥 Top paper today · ▲{p['upvotes']} upvotes", "papers",
+            card(p["title"], p["url"], lead=p["authors"], body=p["summary"],
+                 themes=p["themes"])))
+    if data["feeds"]:
+        f = data["feeds"][0]
+        cards.append(hero(f"🔥 Top news today · {f['source']}", "news",
+            card(f["title"], f["url"], lead=f.get("date", ""), body=f["summary"],
+                 themes=f["themes"])))
+    if not cards:
+        return ""
+    return '<h2>🔥 Most famous today</h2>\n' + "\n".join(cards)
 
 
 def render_body(data):
-    sections = []
+    parts = [render_highlights(data)]
 
     feed_cards = [
         card(f["title"], f["url"], lead=f.get("date", ""), body=f["summary"],
-             themes=f["themes"], src=f["source"])
-        for f in data["feeds"]
+             themes=f["themes"], src=f["source"], rank=i)
+        for i, f in enumerate(data["feeds"], 1)
     ]
-    sections.append(render_section(
+    parts.append(render_section("news",
         "🏢 From the top labs &amp; institutes", feed_cards,
         "No new lab/institute posts in the window."))
 
     hf_cards = []
-    for p in data["hf"]:
+    for i, p in enumerate(data["hf"], 1):
         extra = f" · {p['gh_stars']:,}⭐ repo" if p.get("gh_stars") else ""
         hf_cards.append(card(
             p["title"], p["url"], lead=(p["authors"] + extra) if p["authors"] else extra,
-            body=p["summary"], themes=p["themes"], badge=f"▲ {p['upvotes']}"))
-    sections.append(render_section(
+            body=p["summary"], themes=p["themes"], badge=f"▲ {p['upvotes']}", rank=i))
+    parts.append(render_section("papers",
         "🤗 Hugging Face — most-upvoted papers", hf_cards,
         "No new HF papers today."))
 
     repo_cards = [
         card(r["full_name"], r["url"],
              lead=" · ".join(x for x in [r.get("lang"), r.get("stars")] if x),
-             body=r["desc"], themes=r["themes"])
-        for r in data["repos"]
+             body=r["desc"], themes=r["themes"], rank=i)
+        for i, r in enumerate(data["repos"], 1)
     ]
-    sections.append(render_section(
+    parts.append(render_section("repos",
         "📦 Trending GitHub repos", repo_cards, "No matching repos today."))
 
     paper_cards = [
         card(p["title"], p["url"], lead=p["authors"], body=p["summary"],
-             themes=p["themes"])
-        for p in data["arxiv"]
+             themes=p["themes"], rank=i)
+        for i, p in enumerate(data["arxiv"], 1)
     ]
-    sections.append(render_section(
+    parts.append(render_section("papers",
         "📄 Fresh arXiv papers", paper_cards, "No matching papers today."))
 
-    return "\n".join(sections)
+    return "\n".join(parts)
 
 
 def render_page(date, data, archive_dates, is_index):
@@ -582,10 +643,13 @@ def render_page(date, data, archive_dates, is_index):
 {len(data["hf"])} HF papers · {len(data["repos"])} repos ·
 {len(data["arxiv"])} arXiv · AI advancement, agents, MCP, frontier labs, FAANG</div>
 </header>
+{TABS_HTML}
 {render_body(data)}
 {archive_html}
 <footer>Updated daily via GitHub Actions. Edit <code>config.yaml</code> to tune topics.</footer>
-</div></body></html>"""
+</div>
+{FILTER_JS}
+</body></html>"""
 
 
 def list_archive_dates():
