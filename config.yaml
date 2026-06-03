@@ -156,8 +156,10 @@ feeds:
 # ============================================================================
 ibeam:
   enabled: true
-  min_stars: 8          # construction repos are niche — lower bar than the main feed
-  limits: {github: 12, arxiv: 12, news: 12}
+  papers_and_repos_only: true   # NO news in this vertical — papers + git only
+  min_stars: 8                  # construction repos are niche — lower bar
+  recent_months: 2              # only items from this + last month (May–Jun 2026)
+  limits: {github: 12, papers: 12}
 
   # Secondary keyword gate (word-boundary matched). An item must hit one of these.
   keywords:
@@ -184,6 +186,30 @@ ibeam:
     - built environment
     - contractor
 
+  # STRONG anchors for PAPERS only — generic terms like "point cloud" or bare
+  # "construction" pull in unrelated CV/3D papers, so papers require one of these.
+  paper_keywords:
+    - bim
+    - building information model
+    - building information modeling
+    - scan-to-bim
+    - ifc
+    - aec
+    - takeoff
+    - quantity takeoff
+    - quantity surveying
+    - floor plan
+    - floorplan
+    - blueprint
+    - revit
+    - as-built
+    - construction drawing
+    - construction site
+    - preconstruction
+    - mep
+    - structural drawing
+    - architectural drawing
+
   github_queries:
     - BIM construction
     - scan to BIM
@@ -193,19 +219,10 @@ ibeam:
     - quantity takeoff
     - point cloud building segmentation
 
-  # arXiv full-text phrases (OR-combined) — construction/BIM papers
-  arxiv_terms:
-    - building information modeling
-    - scan-to-BIM
-    - construction drawings
-    - floor plan recognition
-    - quantity takeoff
-    - point cloud segmentation building
-    - automated construction
-
-  # Google News searches (last 7 days — construction-AI news is sparser)
-  news_queries:
-    - {label: "Construction AI", url: "https://news.google.com/rss/search?q=when:7d%20(construction%20OR%20BIM)%20AI%20(takeoff%20OR%20estimating%20OR%20drawings)&hl=en-US&gl=US&ceid=US:en"}
-    - {label: "BIM tech",        url: "https://news.google.com/rss/search?q=when:7d%20BIM%20artificial%20intelligence%20construction&hl=en-US&gl=US&ceid=US:en"}
-    - {label: "Beam AI",         url: "https://news.google.com/rss/search?q=when:7d%20(%22Beam%20AI%22%20OR%20ibeam.ai)%20construction&hl=en-US&gl=US&ceid=US:en"}
-    - {label: "ConTech",         url: "https://news.google.com/rss/search?q=when:7d%20construction%20technology%20AI%20startup&hl=en-US&gl=US&ceid=US:en"}
+  # iBeam papers come from arXiv's daily RSS announcements (always current-month,
+  # reliable) filtered by the construction keywords above — no flaky query API.
+  arxiv_categories:
+    - cs.CV   # computer vision — floor-plan recognition, scan-to-BIM, drawings
+    - cs.AI
+    - cs.LG
+    - cs.RO   # robotics — construction automation, point clouds

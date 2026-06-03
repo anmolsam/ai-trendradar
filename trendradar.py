@@ -441,21 +441,37 @@ def fetch_feeds(cfg, seen):
 
 
 # --------------------------------------------- iBeam.ai (BIM/construction) --
+PIRACY = re.compile(r"crack|keygen|nulled|warez|pirat|torrent", re.I)
+
+
 def ibeam_match(text, keywords):
     t = (text or "").lower()
     return any(re.search(r"\b" + re.escape(k) + r"\b", t) for k in keywords)
 
 
+def month_floor(months_back):
+    """First day of the month `months_back` months before today (UTC)."""
+    now = dt.datetime.now(dt.timezone.utc)
+    y, m = now.year, now.month - months_back
+    while m <= 0:
+        m += 12
+        y -= 1
+    return dt.datetime(y, m, 1, tzinfo=dt.timezone.utc)
+
+
 def fetch_ibeam(cfg, seen):
-    """BIM/construction/AEC vertical: repos + arXiv papers + news for iBeam.ai."""
+    """iBeam.ai vertical — BIM/construction PAPERS + GIT only, recent months only."""
     ib = cfg.get("ibeam", {})
     if not ib.get("enabled", True):
-        return {"github": [], "arxiv": [], "news": []}
+        return {"github": [], "papers": []}
     kws = [k.lower() for k in ib.get("keywords", [])]
+    paper_kws = [k.lower() for k in ib.get("paper_keywords", [])] or kws
     lim = ib.get("limits", {})
+    cutoff = month_floor(ib.get("recent_months", 2) - 1)  # e.g. 2026-05-01
+    cutoff_str = cutoff.strftime("%Y-%m-%d")
     token = os.environ.get("GITHUB_TOKEN")
 
-    # --- GitHub repos ---
+    # --- GitHub repos: on-topic, ≥min_stars, PUSHED in the recent window ---
     headers = dict(UA)
     headers["Accept"] = "application/vnd.github+json"
     if token:
@@ -466,8 +482,8 @@ def fetch_ibeam(cfg, seen):
         try:
             r = requests.get(
                 "https://api.github.com/search/repositories",
-                params={"q": f"{query} stars:>{min_stars}", "sort": "stars",
-                        "order": "desc", "per_page": 8},
+                params={"q": f"{query} stars:>{min_stars} pushed:>{cutoff_str}",
+                        "sort": "updated", "order": "desc", "per_page": 8},
                 headers=headers, timeout=30)
             r.raise_for_status()
             items = r.json().get("items", [])
@@ -479,93 +495,81 @@ def fetch_ibeam(cfg, seen):
             if name in seen["github"] or name in rseen:
                 continue
             text = f"{name} {it.get('description') or ''}"
-            if not ibeam_match(text, kws) or not is_english(text):
+            if PIRACY.search(text) or not ibeam_match(text, kws) or not is_english(text):
                 continue
             rseen.add(name)
             repos.append({
                 "full_name": name, "url": it["html_url"],
                 "desc": it.get("description") or "", "lang": it.get("language") or "",
-                "stars": f"{it.get('stargazers_count', 0):,} stars",
+                "stars": f"{it.get('stargazers_count', 0):,}⭐ · upd {it.get('pushed_at','')[:7]}",
                 "stars_total": it.get("stargazers_count", 0), "themes": [],
             })
     repos.sort(key=lambda r: r["stars_total"], reverse=True)
     repos = repos[: lim.get("github", 12)]
 
-    # --- arXiv papers (full-text search) ---
-    papers = []
-    terms = ib.get("arxiv_terms", [])
-    if terms:
-        q = "+OR+".join(f'all:%22{t.replace(" ", "+")}%22' for t in terms)
-        url = (f"https://export.arxiv.org/api/query?search_query={q}"
-               "&sortBy=submittedDate&sortOrder=descending&max_results=40")
-        for attempt in range(3):
-            try:
-                resp = requests.get(url, headers=UA, timeout=30)
-                if resp.status_code == 429:
-                    time.sleep(4 * (attempt + 1)); continue
-                resp.raise_for_status()
-                entries = feedparser.parse(resp.content).entries
-                break
-            except Exception as e:
-                print(f"[ibeam arxiv] attempt {attempt} failed: {e}", file=sys.stderr)
-                entries = []; time.sleep(3)
-        for entry in entries:
-            aid = arxiv_id(entry.get("link", ""))
-            if aid in seen["arxiv"]:
-                continue
-            title = re.sub(r"\s+", " ", entry.get("title", "")).strip()
-            summary = re.sub(r"\s+", " ", entry.get("summary", "")).strip()
-            text = f"{title} {summary}"
-            if not ibeam_match(text, kws) or not is_english(text):
-                continue
-            authors = ", ".join(a.get("name", "") for a in entry.get("authors", [])[:4])
-            papers.append({
-                "id": aid, "title": title, "url": entry.get("link", ""),
-                "summary": summary[:300] + ("…" if len(summary) > 300 else ""),
-                "authors": authors, "themes": [],
-            })
-        papers = papers[: lim.get("arxiv", 12)]
+    # --- Papers: arXiv. Two sources, both date-filtered so OLD papers (2023)
+    #     can never appear: (1) query API for the recent backlog, (2) daily RSS.
+    papers, pseen = [], set()
 
-    # --- News (Google News searches) ---
-    cutoff = dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=7)
-    news, nseen = [], set()
-    for feed in ib.get("news_queries", []):
+    def add_paper(entry):
+        aid = arxiv_id(entry.get("link", ""))
+        if not aid or aid in seen["arxiv"] or aid in pseen:
+            return
+        pub = entry.get("published_parsed") or entry.get("updated_parsed")
+        if pub and dt.datetime(*pub[:6], tzinfo=dt.timezone.utc) < cutoff:
+            return  # recent months only — hard cutoff kills 2023/old papers
+        title = re.sub(r"\s+", " ", entry.get("title", "")).strip()
+        summary = entry.get("summary", "")
+        if "Abstract:" in summary:
+            summary = summary.split("Abstract:", 1)[1]
+        summary = re.sub(r"\s+", " ", summary).strip()
+        text = f"{title} {summary}"
+        if not ibeam_match(text, paper_kws) or not is_english(text):
+            return
+        pseen.add(aid)
+        authors = entry.get("author", "") or ", ".join(
+            a.get("name", "") for a in entry.get("authors", [])[:4])
+        papers.append({
+            "id": aid, "title": title, "url": f"https://arxiv.org/abs/{aid}",
+            "summary": summary[:300] + ("…" if len(summary) > 300 else ""),
+            "authors": authors, "themes": [],
+        })
+
+    # (1) query API — recent construction/BIM papers across all of arXiv
+    ib_terms = ["building information modeling", "scan-to-BIM",
+                "construction drawings", "floor plan recognition",
+                "quantity takeoff", "construction site", "as-built BIM"]
+    q = "+OR+".join('all:%22' + t.replace(" ", "+") + '%22' for t in ib_terms)
+    url = (f"https://export.arxiv.org/api/query?search_query={q}"
+           "&sortBy=submittedDate&sortOrder=descending&max_results=60")
+    for attempt in range(3):
         try:
-            resp = requests.get(feed["url"], headers=UA, timeout=20)
+            resp = requests.get(url, headers=UA, timeout=40)
+            if resp.status_code == 429:
+                time.sleep(5 * (attempt + 1)); continue
             resp.raise_for_status()
-            entries = feedparser.parse(resp.content).entries
+            for entry in feedparser.parse(resp.content).entries:
+                add_paper(entry)
+            break
         except Exception as e:
-            print(f"[ibeam news] {feed['label']} failed: {e}", file=sys.stderr)
-            continue
-        for entry in entries[:30]:
-            link = entry.get("link", "")
-            if not link or link in seen["feeds"] or link in nseen:
-                continue
-            pub = entry.get("published_parsed") or entry.get("updated_parsed")
-            if not pub:
-                continue
-            pub_dt = dt.datetime(*pub[:6], tzinfo=dt.timezone.utc)
-            if pub_dt < cutoff:
-                continue
-            title = re.sub(r"\s+", " ", entry.get("title", "")).strip()
-            summary = re.sub(r"<[^>]+>", " ", entry.get("summary", "") or "")
-            summary = re.sub(r"\s+", " ", html.unescape(summary)).strip()
-            text = f"{title} {summary}"
-            if not ibeam_match(text, kws) or not is_english(text):
-                continue
-            nseen.add(link)
-            news.append({
-                "title": title, "url": link,
-                "summary": summary[:240] + ("…" if len(summary) > 240 else ""),
-                "source": feed["label"], "date": pub_dt.strftime("%Y-%m-%d"),
-                "ts": pub_dt.timestamp(), "themes": [],
-            })
-    news.sort(key=lambda x: x["ts"], reverse=True)
-    news = news[: lim.get("news", 12)]
+            print(f"[ibeam arxiv-query] attempt {attempt} failed: {e}", file=sys.stderr)
+            time.sleep(4)
 
-    print(f"[ibeam] {len(repos)} repos, {len(papers)} papers, {len(news)} news",
-          file=sys.stderr)
-    return {"github": repos, "arxiv": papers, "news": news}
+    # (2) daily RSS — today's fresh construction papers (reliable supplement)
+    for cat in ib.get("arxiv_categories", []):
+        try:
+            resp = requests.get(f"https://rss.arxiv.org/rss/{cat}", headers=UA, timeout=30)
+            resp.raise_for_status()
+            for entry in feedparser.parse(resp.content).entries:
+                add_paper(entry)
+        except Exception as e:
+            print(f"[ibeam arxiv-rss] {cat} failed: {e}", file=sys.stderr)
+
+    papers = papers[: lim.get("papers", 12)]
+
+    print(f"[ibeam] {len(repos)} repos, {len(papers)} papers "
+          f"(recent since {cutoff_str}, no news)", file=sys.stderr)
+    return {"github": repos, "papers": papers}
 
 
 # ------------------------------------------------------------------ site ----
@@ -749,24 +753,21 @@ def render_body(data):
     parts.append(render_section("papers",
         "📄 Fresh arXiv papers", paper_cards, "No matching papers today."))
 
-    # --- iBeam.ai vertical (BIM / construction / AEC) — its own filter ---
-    ib = data.get("ibeam", {"github": [], "arxiv": [], "news": []})
-    ib_cards = ['<p class="lead">BIM · construction · AEC · takeoff &amp; '
-                'estimating · scan-to-BIM — the iBeam.ai domain.</p>']
-    for i, n in enumerate(ib["news"], 1):
-        ib_cards.append(card(n["title"], n["url"], lead=n.get("date", ""),
-                             body=n["summary"], src=n["source"], rank=i))
-    for i, r in enumerate(ib["github"], 1):
-        ib_cards.append(card(r["full_name"], r["url"],
-                             lead=" · ".join(x for x in [r.get("lang"), r.get("stars")] if x),
-                             body=r["desc"], src="GitHub", rank=i))
-    for i, p in enumerate(ib["arxiv"], 1):
+    # --- iBeam.ai vertical (BIM / construction / AEC) — papers + git only ---
+    ib = data.get("ibeam", {"github": [], "papers": []})
+    ib_cards = ['<p class="lead">BIM · construction · AEC · takeoff &amp; estimating '
+                '· scan-to-BIM — papers &amp; repos only, recent months, never repeated.</p>']
+    for i, p in enumerate(ib["papers"], 1):
         ib_cards.append(card(p["title"], p["url"], lead=p["authors"],
                              body=p["summary"], src="arXiv", rank=i))
+    for i, r in enumerate(ib["github"], 1):
+        ib_cards.append(card(r["full_name"], r["url"], lead=r.get("stars", ""),
+                             body=r["desc"], src=f"GitHub · {r.get('lang','')}".rstrip(" ·"),
+                             rank=i))
     if len(ib_cards) == 1:
-        ib_cards.append('<p class="empty">No new BIM/construction items today.</p>')
+        ib_cards.append('<p class="empty">No new BIM/construction papers or repos today.</p>')
     parts.append(render_section("ibeam",
-        "🏗️ iBeam.ai — BIM &amp; construction AI", ib_cards, ""))
+        "🏗️ iBeam.ai — BIM &amp; construction (papers + git)", ib_cards, ""))
 
     return "\n".join(parts)
 
@@ -846,9 +847,8 @@ def main():
     seen["github"].update(r["full_name"] for r in repos)
     seen["github"].update(r["full_name"] for r in ibeam["github"])
     seen["arxiv"].update(p["id"] for p in arxiv)
-    seen["arxiv"].update(p["id"] for p in ibeam["arxiv"])
+    seen["arxiv"].update(p["id"] for p in ibeam["papers"])
     seen["feeds"].update(f["url"] for f in feeds)
-    seen["feeds"].update(n["url"] for n in ibeam["news"])
     save_seen(seen)
     print(f"[seen] ledger: {len(seen['github'])} repos, "
           f"{len(seen['arxiv'])} papers, {len(seen['feeds'])} posts",
