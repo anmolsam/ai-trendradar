@@ -158,13 +158,16 @@ def fetch_github_search(cfg):
     if token:
         headers["Authorization"] = f"Bearer {token}"
 
+    gh = cfg.get("github", {})
+    min_stars = gh.get("min_stars", 40)
     since = (
         dt.datetime.now(dt.timezone.utc)
-        - dt.timedelta(days=cfg["lookback_days"]["github"])
+        - dt.timedelta(days=gh.get("active_within_days", 30))
     ).strftime("%Y-%m-%d")
 
     for query in cfg.get("github_search_queries", []):
-        q = f"{query} created:>{since}"
+        # popular + recently-maintained + on-topic — not just brand-new 0-star repos
+        q = f"{query} stars:>{min_stars} pushed:>{since}"
         try:
             r = requests.get(
                 "https://api.github.com/search/repositories",
@@ -197,11 +200,15 @@ def fetch_github_search(cfg):
 
 def collect_github(cfg, seen):
     """Collect, theme-filter, drop already-published repos, rank by 'amazing'."""
+    min_stars = cfg.get("github", {}).get("min_stars", 40)
     picked = {}
     for repo in fetch_github_trending(cfg) + fetch_github_search(cfg):
         key = repo["full_name"]
         if key in seen["github"] or key in picked:
             continue  # never repeat a repo we've published before
+        # Quality bar: must be gaining stars today OR already well-starred.
+        if repo["velocity"] == 0 and repo["stars_total"] < min_stars:
+            continue
         text = f"{key} {repo['desc']}"
         if cfg.get("english_only", True) and not is_english(text):
             continue
@@ -281,6 +288,8 @@ def fetch_arxiv(cfg, seen):
             a.get("name", "") for a in entry.get("authors", [])[:4]
         )
         score = sum(ARXIV_THEME_WEIGHT.get(t, 1) for t in themes)
+        if score < cfg.get("arxiv_min_score", 2):
+            continue  # drop weak / generic matches
         papers.append(
             {
                 "id": aid,
@@ -336,6 +345,9 @@ def fetch_hf_papers(cfg, seen):
         themes = matched_themes(text, cfg)
         if not themes:
             continue
+        upvotes = p.get("upvotes", 0) or 0
+        if upvotes < cfg.get("huggingface", {}).get("min_upvotes", 3):
+            continue  # only community-validated papers
         authors = ", ".join(
             a.get("name", "") for a in (p.get("authors") or [])[:4]
         )

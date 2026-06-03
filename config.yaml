@@ -4,11 +4,16 @@
 # Output is a daily HTML page published to GitHub Pages (docs/).
 # No email — each run adds docs/<date>.html and rebuilds docs/index.html.
 
-# TODAY-ONLY mode: every section shows only fresh content from the last day,
-# and the never-repeat ledger guarantees nothing carries over from yesterday.
-lookback_days:
-  github: 1      # repos created in the last day (search API pass)
-  arxiv: 2       # (arXiv uses its latest daily RSS batch regardless)
+# QUALITY BAR — only genuinely trending / well-starred / upvoted items get shown.
+github:
+  min_stars: 40          # search repos must already have at least this many stars
+  active_within_days: 30 # ...and have been pushed within this window (maintained)
+  # (the github.com/trending board is also used — those are kept by stars-today)
+
+# arXiv: drop weak matches. score = sum of theme weights (frontier=3, mcp=3,
+# agents=2, advancement=1). min 2 means it must hit a strong topic or ≥2 themes,
+# not just a generic "llm" mention.
+arxiv_min_score: 2
 
 # Max items per section
 limits:
@@ -28,6 +33,7 @@ feeds_per_source: 3
 huggingface:
   enabled: true
   lookback_days: 3
+  min_upvotes: 3      # ignore papers the community hasn't actually upvoted
 
 # English-only filter. Repos/papers with predominantly non-Latin (CJK etc.)
 # titles+descriptions are dropped.
