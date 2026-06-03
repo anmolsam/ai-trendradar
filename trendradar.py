@@ -535,21 +535,26 @@ def fetch_ibeam(cfg, seen):
             "authors": authors, "themes": [],
         })
 
-    # (1) query API — recent construction/BIM papers across all of arXiv
+    # (1) query API — recent construction/BIM papers across all of arXiv.
+    #     Use params dict so requests handles URL-encoding (manual %22 double-encodes).
     ib_terms = ["building information modeling", "scan-to-BIM",
                 "construction drawings", "floor plan recognition",
                 "quantity takeoff", "construction site", "as-built BIM"]
-    q = "+OR+".join('all:%22' + t.replace(" ", "+") + '%22' for t in ib_terms)
-    url = (f"https://export.arxiv.org/api/query?search_query={q}"
-           "&sortBy=submittedDate&sortOrder=descending&max_results=60")
+    search_q = " OR ".join(f'all:"{t}"' for t in ib_terms)
     for attempt in range(3):
         try:
-            resp = requests.get(url, headers=UA, timeout=40)
+            resp = requests.get(
+                "https://export.arxiv.org/api/query",
+                params={"search_query": search_q, "sortBy": "submittedDate",
+                        "sortOrder": "descending", "max_results": 60},
+                headers=UA, timeout=40)
             if resp.status_code == 429:
                 time.sleep(5 * (attempt + 1)); continue
             resp.raise_for_status()
-            for entry in feedparser.parse(resp.content).entries:
+            got = feedparser.parse(resp.content).entries
+            for entry in got:
                 add_paper(entry)
+            print(f"[ibeam arxiv-query] {len(got)} raw entries", file=sys.stderr)
             break
         except Exception as e:
             print(f"[ibeam arxiv-query] attempt {attempt} failed: {e}", file=sys.stderr)
