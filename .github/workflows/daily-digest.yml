@@ -36,7 +36,7 @@ jobs:
         run: |
           git config user.name "trendradar-bot"
           git config user.email "actions@github.com"
-          git add docs
+          git add docs state
           if git diff --cached --quiet; then
             echo "No changes to commit."
           else

@@ -13,6 +13,7 @@ import re
 import sys
 import glob
 import html
+import json
 import time
 import datetime as dt
 
@@ -36,6 +37,34 @@ def all_keywords(cfg):
     for group in cfg["themes"].values():
         kws.extend(k.strip().lower() for k in group)
     return kws
+
+
+# --------------------------------------------------- persistent seen-ledger -
+# Every repo/paper we've ever PUBLISHED is recorded here so it never repeats
+# on a future day. Committed back to the repo each run (state/seen.json).
+SEEN_PATH = os.path.join(ROOT, "state", "seen.json")
+
+
+def load_seen():
+    try:
+        with open(SEEN_PATH, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        data = {}
+    return {
+        "github": set(data.get("github", [])),
+        "arxiv": set(data.get("arxiv", [])),
+    }
+
+
+def save_seen(seen):
+    os.makedirs(os.path.dirname(SEEN_PATH), exist_ok=True)
+    with open(SEEN_PATH, "w", encoding="utf-8") as f:
+        json.dump(
+            {"github": sorted(seen["github"]), "arxiv": sorted(seen["arxiv"])},
+            f,
+            indent=0,
+        )
 
 
 # ------------------------------------------------------------- filtering ----
@@ -92,9 +121,13 @@ def fetch_github_trending(cfg):
         lang_el = row.select_one('[itemprop="programmingLanguage"]')
         lang = lang_el.get_text(strip=True) if lang_el else ""
         stars_today = ""
+        velocity = 0
         star_el = row.select_one("span.d-inline-block.float-sm-right")
         if star_el:
             stars_today = star_el.get_text(strip=True)
+            m = re.search(r"([\d,]+)", stars_today)
+            if m:
+                velocity = int(m.group(1).replace(",", ""))
         repos.append(
             {
                 "full_name": full_name,
@@ -102,6 +135,8 @@ def fetch_github_trending(cfg):
                 "desc": desc,
                 "lang": lang,
                 "stars": stars_today,
+                "velocity": velocity,   # stars gained today (mcpmarket "Top Today")
+                "stars_total": 0,
                 "source": "trending",
             }
         )
@@ -138,13 +173,16 @@ def fetch_github_search(cfg):
             print(f"[github search] '{query}' failed: {e}", file=sys.stderr)
             continue
         for it in items:
+            total = it.get("stargazers_count", 0)
             repos.append(
                 {
                     "full_name": it["full_name"],
                     "url": it["html_url"],
                     "desc": it.get("description") or "",
                     "lang": it.get("language") or "",
-                    "stars": f"{it.get('stargazers_count', 0)} stars",
+                    "stars": f"{total:,} stars",
+                    "velocity": 0,
+                    "stars_total": total,
                     "source": "search",
                 }
             )
@@ -152,28 +190,49 @@ def fetch_github_search(cfg):
     return repos
 
 
-def collect_github(cfg):
-    seen = {}
+def collect_github(cfg, seen):
+    """Collect, theme-filter, drop already-published repos, rank by 'amazing'."""
+    picked = {}
     for repo in fetch_github_trending(cfg) + fetch_github_search(cfg):
-        text = f"{repo['full_name']} {repo['desc']}"
+        key = repo["full_name"]
+        if key in seen["github"] or key in picked:
+            continue  # never repeat a repo we've published before
+        text = f"{key} {repo['desc']}"
         if cfg.get("english_only", True) and not is_english(text):
             continue
         themes = matched_themes(text, cfg)
         if not themes:
             continue
-        key = repo["full_name"]
-        if key in seen:
-            continue
         repo["themes"] = sorted(themes)
-        seen[key] = repo
-    out = list(seen.values())
-    # trending-scraped first, then by theme count
-    out.sort(key=lambda r: (r["source"] != "trending", -len(r["themes"])))
+        picked[key] = repo
+    out = list(picked.values())
+    # "Most amazing" = mcpmarket-style: star velocity (today) first, then total
+    # stars, then how many themes it hits.
+    out.sort(
+        key=lambda r: (r["velocity"], r["stars_total"], len(r["themes"])),
+        reverse=True,
+    )
     return out[: cfg["limits"]["github"]]
 
 
 # ---------------------------------------------------------------- arxiv -----
-def fetch_arxiv(cfg):
+# Theme weights for the paper "amazing" score — brand-new papers have no
+# citations on day 1, so we proxy quality by topic salience.
+ARXIV_THEME_WEIGHT = {
+    "frontier_labs": 3,
+    "mcp": 3,
+    "ai_agents": 2,
+    "ai_advancement": 1,
+    "faang": 1,
+}
+
+
+def arxiv_id(link):
+    m = re.search(r"abs/([\d.]+)", link or "")
+    return m.group(1) if m else link
+
+
+def fetch_arxiv(cfg, seen):
     cats = cfg.get("arxiv_categories", [])
     if not cats:
         return []
@@ -194,13 +253,14 @@ def fetch_arxiv(cfg):
                 print(f"[arxiv] {cat} attempt {attempt} failed: {e}", file=sys.stderr)
                 time.sleep(3)
 
-    seen, papers = set(), []
+    run_seen, papers = set(), []
     for entry in entries:
         title = re.sub(r"\s+", " ", entry.get("title", "")).strip()
         link = entry.get("link", "")
-        if link in seen:
-            continue
-        seen.add(link)
+        aid = arxiv_id(link)
+        if aid in run_seen or aid in seen["arxiv"]:
+            continue  # de-dup within run AND never repeat a published paper
+        run_seen.add(aid)
         summary = entry.get("summary", "")
         # RSS abstracts are prefixed with "...Announce Type: new\nAbstract: ..."
         if "Abstract:" in summary:
@@ -215,17 +275,20 @@ def fetch_arxiv(cfg):
         authors = entry.get("author", "") or ", ".join(
             a.get("name", "") for a in entry.get("authors", [])[:4]
         )
+        score = sum(ARXIV_THEME_WEIGHT.get(t, 1) for t in themes)
         papers.append(
             {
+                "id": aid,
                 "title": title,
                 "url": link,
                 "summary": summary[:320] + ("…" if len(summary) > 320 else ""),
                 "authors": authors,
                 "themes": sorted(themes),
+                "score": score,
             }
         )
-    papers.sort(key=lambda p: -len(p["themes"]))
-    print(f"[arxiv] matched {len(papers)} papers", file=sys.stderr)
+    papers.sort(key=lambda p: (p["score"], len(p["themes"])), reverse=True)
+    print(f"[arxiv] {len(papers)} new matched papers (after dedup)", file=sys.stderr)
     return papers[: cfg["limits"]["arxiv"]]
 
 
@@ -389,9 +452,18 @@ def main():
     cfg = load_config()
     today = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d")
 
-    repos = collect_github(cfg)
-    papers = fetch_arxiv(cfg)
+    seen = load_seen()
+    repos = collect_github(cfg, seen)
+    papers = fetch_arxiv(cfg, seen)
+
     write_site(repos, papers, today)
+
+    # Record everything we published today so it never repeats on a future day.
+    seen["github"].update(r["full_name"] for r in repos)
+    seen["arxiv"].update(p["id"] for p in papers)
+    save_seen(seen)
+    print(f"[seen] ledger now holds {len(seen['github'])} repos, "
+          f"{len(seen['arxiv'])} papers", file=sys.stderr)
 
 
 if __name__ == "__main__":
