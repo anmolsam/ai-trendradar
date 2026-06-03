@@ -1,0 +1,104 @@
+# AI TrendRadar configuration
+# Edit keywords/recipients here. No code changes needed.
+
+email:
+  to:
+    - anmol@attentive.ai
+  # from / smtp are read from GitHub secrets (GMAIL_USER, GMAIL_APP_PASSWORD)
+  subject_prefix: "AI TrendRadar"
+
+# How far back to look (in days) for "trending"
+lookback_days:
+  github: 7      # repos created in the last N days (for the search API pass)
+  arxiv: 2       # papers submitted in the last N days
+
+# Max items per section in the email
+limits:
+  github: 20
+  arxiv: 20
+
+# English-only filter. Repos/papers with predominantly non-Latin (CJK etc.)
+# titles+descriptions are dropped.
+english_only: true
+
+# Topic themes. An item is kept if its text matches ANY keyword below.
+# Matching is case-insensitive substring. Keep keywords lowercase.
+themes:
+  ai_advancement:
+    - large language model
+    - foundation model
+    - reasoning model
+    - multimodal
+    - diffusion model
+    - transformer
+    - fine-tuning
+    - fine tuning
+    - retrieval augmented
+    - rag
+    - benchmark
+    - state of the art
+    - alignment
+    - reinforcement learning
+    - inference engine
+    - quantization
+    - llm
+
+  ai_agents:
+    - ai agent
+    - agentic
+    - autonomous agent
+    - multi-agent
+    - multi agent
+    - agent framework
+    - tool use
+    - tool calling
+    - computer use
+    - browser agent
+    - coding agent
+
+  mcp:
+    - mcp server
+    - model context protocol
+    - mcp client
+    - "mcp "
+
+  frontier_labs:
+    - anthropic
+    - claude
+    - openai
+    - gpt-4
+    - gpt-5
+    - o1
+    - o3
+    - deepmind
+    - gemini
+    - mistral
+    - llama
+    - qwen
+    - deepseek
+    - grok
+    - xai
+
+  faang:
+    - meta ai
+    - nvidia
+    - microsoft research
+    - google research
+    - apple intelligence
+    - amazon bedrock
+
+# Extra GitHub Search API queries (run in addition to scraping github.com/trending).
+# Each is a free-text query; results are filtered by themes + english_only too.
+github_search_queries:
+  - mcp server
+  - model context protocol
+  - ai agent framework
+  - agentic workflow
+  - llm framework
+
+# arXiv categories to pull recent submissions from.
+arxiv_categories:
+  - cs.AI
+  - cs.CL
+  - cs.LG
+  - cs.MA   # multi-agent systems
