@@ -611,29 +611,17 @@ def render_body(data):
     return "\n".join(parts)
 
 
-def render_page(date, data, archive_dates, is_index):
-    nav = (
-        '<nav class="bar"><a href="index.html">← Latest</a>'
-        '<a href="https://github.com/anmolsam/ai-trendradar" target="_blank" '
-        'rel="noopener">Source on GitHub</a></nav>'
-        if not is_index
-        else '<nav class="bar"><span></span>'
-        '<a href="https://github.com/anmolsam/ai-trendradar" target="_blank" '
-        'rel="noopener">Source on GitHub</a></nav>'
-    )
-
-    archive_html = ""
-    if is_index and archive_dates:
-        links = "".join(f'<a href="{d}.html">{d}</a>' for d in archive_dates)
-        archive_html = f'<h2>🗓️ Archive</h2><div class="archive">{links}</div>'
-
-    title = "AI TrendRadar" if is_index else f"AI TrendRadar — {date}"
+def render_page(date, data):
+    # TODAY ONLY — no archive, no history. index.html is fully replaced each day.
+    nav = ('<nav class="bar"><span></span>'
+           '<a href="https://github.com/anmolsam/ai-trendradar" target="_blank" '
+           'rel="noopener">Source on GitHub</a></nav>')
     return f"""<!DOCTYPE html>
 <html lang="en"><head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta http-equiv="refresh" content="3600">
-<title>{esc(title)}</title>
+<title>AI TrendRadar — Today</title>
 <style>{PAGE_CSS}</style>
 </head><body><div class="wrap">
 {nav}
@@ -645,42 +633,28 @@ def render_page(date, data, archive_dates, is_index):
 </header>
 {TABS_HTML}
 {render_body(data)}
-{archive_html}
-<footer>Updated daily via GitHub Actions. Edit <code>config.yaml</code> to tune topics.</footer>
+<footer>Fresh every day at 09:00 IST via GitHub Actions — today only, never repeated.
+Edit <code>config.yaml</code> to tune topics.</footer>
 </div>
 {FILTER_JS}
 </body></html>"""
 
 
-def list_archive_dates():
-    """All dated pages already in docs/, newest first."""
-    dates = []
-    for path in glob.glob(os.path.join(DOCS, "*.html")):
-        name = os.path.splitext(os.path.basename(path))[0]
-        if re.fullmatch(r"\d{4}-\d{2}-\d{2}", name):
-            dates.append(name)
-    return sorted(set(dates), reverse=True)
-
-
 def write_site(data, today):
     os.makedirs(DOCS, exist_ok=True)
-    # disable Jekyll so files are served verbatim
-    open(os.path.join(DOCS, ".nojekyll"), "w").close()
+    open(os.path.join(DOCS, ".nojekyll"), "w").close()  # serve files verbatim
 
-    # today's archived page (overwrite if re-run same day)
-    day_path = os.path.join(DOCS, f"{today}.html")
-    with open(day_path, "w", encoding="utf-8") as f:
-        f.write(render_page(today, data, [], is_index=False))
+    # Remove any leftover dated archive pages — we keep today only.
+    for old in glob.glob(os.path.join(DOCS, "[0-9]" * 4 + "-*.html")):
+        os.remove(old)
 
-    # index = today's content + archive list of every past day
-    archive = [d for d in list_archive_dates() if d != today]
     with open(os.path.join(DOCS, "index.html"), "w", encoding="utf-8") as f:
-        f.write(render_page(today, data, archive, is_index=True))
+        f.write(render_page(today, data))
 
-    print(f"[site] wrote {day_path} and index.html "
-          f"({len(data['feeds'])} posts, {len(data['hf'])} hf, "
-          f"{len(data['repos'])} repos, {len(data['arxiv'])} arxiv, "
-          f"{len(archive)} archived days)", file=sys.stderr)
+    print(f"[site] wrote index.html (today only) — "
+          f"{len(data['feeds'])} posts, {len(data['hf'])} hf, "
+          f"{len(data['repos'])} repos, {len(data['arxiv'])} arxiv",
+          file=sys.stderr)
 
 
 # ------------------------------------------------------------------ main ----

@@ -35,11 +35,10 @@ new content.
 
 ## How it publishes
 
-Each run writes:
-- `docs/<YYYY-MM-DD>.html` — that day's archived snapshot.
-- `docs/index.html` — the latest digest + an **Archive** list linking every past day.
-
-GitHub Pages serves the `docs/` folder on the `main` branch.
+**Today only — no history.** Each run fully replaces `docs/index.html` with the
+current day's content; any old dated pages are deleted. GitHub Pages serves the
+`docs/` folder on the `main` branch. The seen-ledger guarantees nothing repeats,
+so "today only" is always genuinely new.
 
 ## Setup (already done for this repo)
 
