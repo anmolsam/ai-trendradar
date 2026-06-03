@@ -440,6 +440,134 @@ def fetch_feeds(cfg, seen):
     return capped[: cfg["limits"]["feeds"]]
 
 
+# --------------------------------------------- iBeam.ai (BIM/construction) --
+def ibeam_match(text, keywords):
+    t = (text or "").lower()
+    return any(re.search(r"\b" + re.escape(k) + r"\b", t) for k in keywords)
+
+
+def fetch_ibeam(cfg, seen):
+    """BIM/construction/AEC vertical: repos + arXiv papers + news for iBeam.ai."""
+    ib = cfg.get("ibeam", {})
+    if not ib.get("enabled", True):
+        return {"github": [], "arxiv": [], "news": []}
+    kws = [k.lower() for k in ib.get("keywords", [])]
+    lim = ib.get("limits", {})
+    token = os.environ.get("GITHUB_TOKEN")
+
+    # --- GitHub repos ---
+    headers = dict(UA)
+    headers["Accept"] = "application/vnd.github+json"
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    min_stars = ib.get("min_stars", 8)
+    repos, rseen = [], set()
+    for query in ib.get("github_queries", []):
+        try:
+            r = requests.get(
+                "https://api.github.com/search/repositories",
+                params={"q": f"{query} stars:>{min_stars}", "sort": "stars",
+                        "order": "desc", "per_page": 8},
+                headers=headers, timeout=30)
+            r.raise_for_status()
+            items = r.json().get("items", [])
+        except Exception as e:
+            print(f"[ibeam gh] '{query}' failed: {e}", file=sys.stderr)
+            continue
+        for it in items:
+            name = it["full_name"]
+            if name in seen["github"] or name in rseen:
+                continue
+            text = f"{name} {it.get('description') or ''}"
+            if not ibeam_match(text, kws) or not is_english(text):
+                continue
+            rseen.add(name)
+            repos.append({
+                "full_name": name, "url": it["html_url"],
+                "desc": it.get("description") or "", "lang": it.get("language") or "",
+                "stars": f"{it.get('stargazers_count', 0):,} stars",
+                "stars_total": it.get("stargazers_count", 0), "themes": [],
+            })
+    repos.sort(key=lambda r: r["stars_total"], reverse=True)
+    repos = repos[: lim.get("github", 12)]
+
+    # --- arXiv papers (full-text search) ---
+    papers = []
+    terms = ib.get("arxiv_terms", [])
+    if terms:
+        q = "+OR+".join(f'all:%22{t.replace(" ", "+")}%22' for t in terms)
+        url = (f"https://export.arxiv.org/api/query?search_query={q}"
+               "&sortBy=submittedDate&sortOrder=descending&max_results=40")
+        for attempt in range(3):
+            try:
+                resp = requests.get(url, headers=UA, timeout=30)
+                if resp.status_code == 429:
+                    time.sleep(4 * (attempt + 1)); continue
+                resp.raise_for_status()
+                entries = feedparser.parse(resp.content).entries
+                break
+            except Exception as e:
+                print(f"[ibeam arxiv] attempt {attempt} failed: {e}", file=sys.stderr)
+                entries = []; time.sleep(3)
+        for entry in entries:
+            aid = arxiv_id(entry.get("link", ""))
+            if aid in seen["arxiv"]:
+                continue
+            title = re.sub(r"\s+", " ", entry.get("title", "")).strip()
+            summary = re.sub(r"\s+", " ", entry.get("summary", "")).strip()
+            text = f"{title} {summary}"
+            if not ibeam_match(text, kws) or not is_english(text):
+                continue
+            authors = ", ".join(a.get("name", "") for a in entry.get("authors", [])[:4])
+            papers.append({
+                "id": aid, "title": title, "url": entry.get("link", ""),
+                "summary": summary[:300] + ("…" if len(summary) > 300 else ""),
+                "authors": authors, "themes": [],
+            })
+        papers = papers[: lim.get("arxiv", 12)]
+
+    # --- News (Google News searches) ---
+    cutoff = dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=7)
+    news, nseen = [], set()
+    for feed in ib.get("news_queries", []):
+        try:
+            resp = requests.get(feed["url"], headers=UA, timeout=20)
+            resp.raise_for_status()
+            entries = feedparser.parse(resp.content).entries
+        except Exception as e:
+            print(f"[ibeam news] {feed['label']} failed: {e}", file=sys.stderr)
+            continue
+        for entry in entries[:30]:
+            link = entry.get("link", "")
+            if not link or link in seen["feeds"] or link in nseen:
+                continue
+            pub = entry.get("published_parsed") or entry.get("updated_parsed")
+            if not pub:
+                continue
+            pub_dt = dt.datetime(*pub[:6], tzinfo=dt.timezone.utc)
+            if pub_dt < cutoff:
+                continue
+            title = re.sub(r"\s+", " ", entry.get("title", "")).strip()
+            summary = re.sub(r"<[^>]+>", " ", entry.get("summary", "") or "")
+            summary = re.sub(r"\s+", " ", html.unescape(summary)).strip()
+            text = f"{title} {summary}"
+            if not ibeam_match(text, kws) or not is_english(text):
+                continue
+            nseen.add(link)
+            news.append({
+                "title": title, "url": link,
+                "summary": summary[:240] + ("…" if len(summary) > 240 else ""),
+                "source": feed["label"], "date": pub_dt.strftime("%Y-%m-%d"),
+                "ts": pub_dt.timestamp(), "themes": [],
+            })
+    news.sort(key=lambda x: x["ts"], reverse=True)
+    news = news[: lim.get("news", 12)]
+
+    print(f"[ibeam] {len(repos)} repos, {len(papers)} papers, {len(news)} news",
+          file=sys.stderr)
+    return {"github": repos, "arxiv": papers, "news": news}
+
+
 # ------------------------------------------------------------------ site ----
 DOCS = os.path.join(ROOT, "docs")
 
@@ -540,6 +668,7 @@ TABS_HTML = """<div class="tabs">
 <button class="tab" data-tab="news" onclick="flt('news',this)">📰 News</button>
 <button class="tab" data-tab="papers" onclick="flt('papers',this)">📄 Papers</button>
 <button class="tab" data-tab="repos" onclick="flt('repos',this)">📦 Repos</button>
+<button class="tab" data-tab="ibeam" onclick="flt('ibeam',this)">🏗️ iBeam.ai</button>
 </div>"""
 
 FILTER_JS = """<script>
@@ -620,6 +749,25 @@ def render_body(data):
     parts.append(render_section("papers",
         "📄 Fresh arXiv papers", paper_cards, "No matching papers today."))
 
+    # --- iBeam.ai vertical (BIM / construction / AEC) — its own filter ---
+    ib = data.get("ibeam", {"github": [], "arxiv": [], "news": []})
+    ib_cards = ['<p class="lead">BIM · construction · AEC · takeoff &amp; '
+                'estimating · scan-to-BIM — the iBeam.ai domain.</p>']
+    for i, n in enumerate(ib["news"], 1):
+        ib_cards.append(card(n["title"], n["url"], lead=n.get("date", ""),
+                             body=n["summary"], src=n["source"], rank=i))
+    for i, r in enumerate(ib["github"], 1):
+        ib_cards.append(card(r["full_name"], r["url"],
+                             lead=" · ".join(x for x in [r.get("lang"), r.get("stars")] if x),
+                             body=r["desc"], src="GitHub", rank=i))
+    for i, p in enumerate(ib["arxiv"], 1):
+        ib_cards.append(card(p["title"], p["url"], lead=p["authors"],
+                             body=p["summary"], src="arXiv", rank=i))
+    if len(ib_cards) == 1:
+        ib_cards.append('<p class="empty">No new BIM/construction items today.</p>')
+    parts.append(render_section("ibeam",
+        "🏗️ iBeam.ai — BIM &amp; construction AI", ib_cards, ""))
+
     return "\n".join(parts)
 
 
@@ -633,6 +781,7 @@ def render_page(date, data):
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta http-equiv="refresh" content="3600">
+<link rel="icon" type="image/svg+xml" href="favicon.svg">
 <title>AI TrendRadar — Today</title>
 <style>{PAGE_CSS}</style>
 </head><body><div class="wrap">
@@ -652,9 +801,15 @@ Edit <code>config.yaml</code> to tune topics.</footer>
 </body></html>"""
 
 
+FAVICON_SVG = ('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">'
+               '<text y=".9em" font-size="90">🛰️</text></svg>')
+
+
 def write_site(data, today):
     os.makedirs(DOCS, exist_ok=True)
     open(os.path.join(DOCS, ".nojekyll"), "w").close()  # serve files verbatim
+    with open(os.path.join(DOCS, "favicon.svg"), "w", encoding="utf-8") as f:
+        f.write(FAVICON_SVG)
 
     # Remove any leftover dated archive pages — we keep today only.
     for old in glob.glob(os.path.join(DOCS, "[0-9]" * 4 + "-*.html")):
@@ -682,14 +837,18 @@ def main():
     repos = collect_github(cfg, seen)
     arxiv = fetch_arxiv(cfg, seen)
     feeds = fetch_feeds(cfg, seen)
+    ibeam = fetch_ibeam(cfg, seen)
 
-    data = {"feeds": feeds, "hf": hf, "repos": repos, "arxiv": arxiv}
+    data = {"feeds": feeds, "hf": hf, "repos": repos, "arxiv": arxiv, "ibeam": ibeam}
     write_site(data, today)
 
     # Record everything published today so it never repeats on a future day.
     seen["github"].update(r["full_name"] for r in repos)
+    seen["github"].update(r["full_name"] for r in ibeam["github"])
     seen["arxiv"].update(p["id"] for p in arxiv)
+    seen["arxiv"].update(p["id"] for p in ibeam["arxiv"])
     seen["feeds"].update(f["url"] for f in feeds)
+    seen["feeds"].update(n["url"] for n in ibeam["news"])
     save_seen(seen)
     print(f"[seen] ledger: {len(seen['github'])} repos, "
           f"{len(seen['arxiv'])} papers, {len(seen['feeds'])} posts",

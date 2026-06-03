@@ -148,3 +148,64 @@ feeds:
   - {label: "xAI Grok",  type: news, url: "https://news.google.com/rss/search?q=when:1d%20xAI%20Grok&hl=en-US&gl=US&ceid=US:en"}
   # --- AI news aggregator ---
   - {label: "MarkTechPost",      type: news, url: "https://www.marktechpost.com/feed/"}
+
+# ============================================================================
+# iBeam.ai vertical — BIM / construction / AEC AI (own tab, separate from above)
+# Mirrors what ibeam.ai does: AI takeoff & estimating, computer vision on
+# construction drawings, BIM, quantity extraction, scan-to-BIM, point clouds.
+# ============================================================================
+ibeam:
+  enabled: true
+  min_stars: 8          # construction repos are niche — lower bar than the main feed
+  limits: {github: 12, arxiv: 12, news: 12}
+
+  # Secondary keyword gate (word-boundary matched). An item must hit one of these.
+  keywords:
+    - bim
+    - building information modeling
+    - building information model
+    - construction
+    - aec
+    - takeoff
+    - quantity takeoff
+    - quantity surveying
+    - estimating
+    - preconstruction
+    - ifc
+    - scan-to-bim
+    - point cloud
+    - floor plan
+    - floorplan
+    - blueprint
+    - mep
+    - revit
+    - as-built
+    - digital twin
+    - built environment
+    - contractor
+
+  github_queries:
+    - BIM construction
+    - scan to BIM
+    - IFC building information
+    - floor plan recognition
+    - construction estimating
+    - quantity takeoff
+    - point cloud building segmentation
+
+  # arXiv full-text phrases (OR-combined) — construction/BIM papers
+  arxiv_terms:
+    - building information modeling
+    - scan-to-BIM
+    - construction drawings
+    - floor plan recognition
+    - quantity takeoff
+    - point cloud segmentation building
+    - automated construction
+
+  # Google News searches (last 7 days — construction-AI news is sparser)
+  news_queries:
+    - {label: "Construction AI", url: "https://news.google.com/rss/search?q=when:7d%20(construction%20OR%20BIM)%20AI%20(takeoff%20OR%20estimating%20OR%20drawings)&hl=en-US&gl=US&ceid=US:en"}
+    - {label: "BIM tech",        url: "https://news.google.com/rss/search?q=when:7d%20BIM%20artificial%20intelligence%20construction&hl=en-US&gl=US&ceid=US:en"}
+    - {label: "Beam AI",         url: "https://news.google.com/rss/search?q=when:7d%20(%22Beam%20AI%22%20OR%20ibeam.ai)%20construction&hl=en-US&gl=US&ceid=US:en"}
+    - {label: "ConTech",         url: "https://news.google.com/rss/search?q=when:7d%20construction%20technology%20AI%20startup&hl=en-US&gl=US&ceid=US:en"}
